@@ -54,11 +54,13 @@ class MainActivity : AppCompatActivity() {
             when (intent.action) {
                 DownloadService.ACTION_DOWNLOAD_PROGRESS -> {
                     val message = intent.getStringExtra(DownloadService.EXTRA_STATUS_MESSAGE) ?: "다운로드 중..."
-                    viewModel.updateDownloadStatus(message, true)
+                    val isDownloading = intent.getBooleanExtra(DownloadService.EXTRA_IS_DOWNLOADING, true)
+                    viewModel.updateDownloadStatus(message, isDownloading)
                 }
                 DownloadService.ACTION_DOWNLOAD_COMPLETE -> {
                     val message = intent.getStringExtra(DownloadService.EXTRA_STATUS_MESSAGE) ?: "완료"
-                    viewModel.updateDownloadStatus(message, false)
+                    val isDownloading = intent.getBooleanExtra(DownloadService.EXTRA_IS_DOWNLOADING, false)
+                    viewModel.updateDownloadStatus(message, isDownloading)
                     binding.urlEditText.text.clear()
                 }
             }

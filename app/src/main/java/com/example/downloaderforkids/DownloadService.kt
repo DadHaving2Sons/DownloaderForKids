@@ -38,9 +38,13 @@ class DownloadService : Service() {
         const val ACTION_DOWNLOAD_COMPLETE = "com.example.downloaderforkids.DOWNLOAD_COMPLETE"
         const val EXTRA_PROGRESS = "extra_progress"
         const val EXTRA_STATUS_MESSAGE = "extra_status_message"
+        const val EXTRA_IS_DOWNLOADING = "extra_is_downloading"
+
+        private val activeDownloadCount = AtomicInteger(0)
+
+        fun isDownloadInProgress(): Boolean = activeDownloadCount.get() > 0
     }
 
-    private val activeDownloads = AtomicInteger(0)
     private val notificationIdCounter = AtomicInteger(100)
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -65,11 +69,11 @@ class DownloadService : Service() {
             val notification = createNotification(getString(R.string.download_preparing), 0, true)
             startForeground(notificationId, notification)
             
-            activeDownloads.incrementAndGet()
+            activeDownloadCount.incrementAndGet()
             startDownload(url, videoId, audioId, saveUri, notificationId)
         } else {
             // Only stop if no downloads are active
-            if (activeDownloads.get() == 0) {
+            if (activeDownloadCount.get() == 0) {
                 stopSelf()
             }
         }
@@ -82,6 +86,7 @@ class DownloadService : Service() {
             val tempDirName = "temp_dl_${System.currentTimeMillis()}_$notificationId"
             val tempDir = File(externalCacheDir, tempDirName)
             var fileName = "video.mp4"
+            var completionStatusMessage = getString(R.string.unknown_error)
 
             try {
                 if (!tempDir.exists()) tempDir.mkdirs()
@@ -104,6 +109,7 @@ class DownloadService : Service() {
                     val intent = Intent(ACTION_DOWNLOAD_PROGRESS).apply {
                         putExtra(EXTRA_PROGRESS, progress.toInt())
                         putExtra(EXTRA_STATUS_MESSAGE, progressText)
+                        putExtra(EXTRA_IS_DOWNLOADING, true)
                         setPackage(packageName)
                     }
                     sendBroadcast(intent)
@@ -131,29 +137,26 @@ class DownloadService : Service() {
 
                 withContext(Dispatchers.Main) {
                     showCompletionNotification(notificationId, getString(R.string.download_complete_title), getString(R.string.download_complete_content, fileName))
-                    
-                    val intent = Intent(ACTION_DOWNLOAD_COMPLETE).apply {
-                        putExtra(EXTRA_STATUS_MESSAGE, getString(R.string.download_success, fileName))
-                        setPackage(packageName)
-                    }
-                    sendBroadcast(intent)
                 }
+                completionStatusMessage = getString(R.string.download_success, fileName)
 
             } catch (e: Exception) {
                 Log.e("DownloadService", "Error", e)
                 withContext(Dispatchers.Main) {
                     showCompletionNotification(notificationId, getString(R.string.download_fail_title), e.message ?: getString(R.string.unknown_error))
-                    
-                    val intent = Intent(ACTION_DOWNLOAD_COMPLETE).apply {
-                        putExtra(EXTRA_STATUS_MESSAGE, getString(R.string.error_prefix, e.message))
-                        setPackage(packageName)
-                    }
-                    sendBroadcast(intent)
                 }
+                completionStatusMessage = getString(R.string.error_prefix, e.message)
             } finally {
                 tempDir.deleteRecursively()
-                
-                val remaining = activeDownloads.decrementAndGet()
+
+                val remaining = activeDownloadCount.decrementAndGet()
+                val intent = Intent(ACTION_DOWNLOAD_COMPLETE).apply {
+                    putExtra(EXTRA_STATUS_MESSAGE, completionStatusMessage)
+                    putExtra(EXTRA_IS_DOWNLOADING, remaining > 0)
+                    setPackage(packageName)
+                }
+                sendBroadcast(intent)
+
                 if (remaining == 0) {
                     stopForeground(STOP_FOREGROUND_DETACH)
                     stopSelf()
