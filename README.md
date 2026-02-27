@@ -7,7 +7,8 @@ A simple and robust Android application for downloading videos and audio from Yo
 - **Video & Audio Download**: Supports downloading video (mp4) or audio-only (m4a, mp3) formats.
 - **Format Selection**: Analyzing the URL presents a list of available video resolutions and audio qualities.
 - **Background Downloading**: Downloads continue in the background with a persistent notification showing progress.
-- **Automated Library Updates**: Automatically checks and updates the `yt-dlp` core library on app startup to ensure compatibility.
+- **Smart Library Updates**: Checks and updates the `yt-dlp` core library on a schedule (once every 24 hours) instead of every foreground launch.
+- **Download-Safe Update Checks**: Skips update checks while downloads are in progress and runs the pending check after downloads finish.
 - **Concurrent Downloads**: Supports multiple simultaneous downloads without conflict.
 
 ## Architecture
@@ -31,6 +32,13 @@ This project follows the **MVVM (Model-View-ViewModel)** architecture pattern to
 - **Libraries**:
     - [youtubedl-android](https://github.com/yausername/youtubedl-android) (Wrapper for yt-dlp)
     - FFmpeg (for media processing)
+
+## yt-dlp Update Policy
+
+- The app attempts a `yt-dlp` update check at most once every 24 hours.
+- If one or more downloads are running, the check is deferred.
+- When all downloads are completed, a deferred check is automatically retried.
+- Update results are shown to the user (updated, already up-to-date, or failed).
 
 ## Setup
 
