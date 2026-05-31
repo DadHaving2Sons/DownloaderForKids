@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
 class DownloadService : Service() {
@@ -85,7 +86,6 @@ class DownloadService : Service() {
         CoroutineScope(Dispatchers.IO).launch {
             val tempDirName = "temp_dl_${System.currentTimeMillis()}_$notificationId"
             val tempDir = File(externalCacheDir, tempDirName)
-            var fileName = "video.mp4"
             var completionStatusMessage = getString(R.string.unknown_error)
 
             try {
@@ -103,42 +103,38 @@ class DownloadService : Service() {
                 request.addOption("--force-overwrites")
 
                 YoutubeDL.getInstance().execute(request) { progress, eta, _ ->
+                    val progressPercent = progress.toInt().coerceIn(0, 100)
                     val progressText = getString(R.string.download_progress, "$progress% (ETA: $eta s)")
-                    updateNotification(notificationId, progressText, progress.toInt(), true)
-                    
-                    val intent = Intent(ACTION_DOWNLOAD_PROGRESS).apply {
-                        putExtra(EXTRA_PROGRESS, progress.toInt())
-                        putExtra(EXTRA_STATUS_MESSAGE, progressText)
-                        putExtra(EXTRA_IS_DOWNLOADING, true)
-                        setPackage(packageName)
-                    }
-                    sendBroadcast(intent)
+                    updateNotification(notificationId, progressText, progressPercent, true)
+                    sendDownloadProgress(progressPercent, progressText)
                 }
 
-                val downloadedFile = tempDir.listFiles()?.firstOrNull()
-                    ?: throw IOException(getString(R.string.file_creation_fail))
-                fileName = downloadedFile.name
-
-                val targetDir = DocumentFile.fromTreeUri(applicationContext, saveUri)!!
-                val mimeType = if (fileName.endsWith(".m4a") || fileName.endsWith(".mp3") || fileName.endsWith(".webm") && videoId == "none") "audio/*" else "video/mp4"
-
-                val destFile = targetDir.findFile(fileName)?.let {
-                    it.delete()
-                    targetDir.createFile(mimeType, fileName)
-                } ?: targetDir.createFile(mimeType, fileName)
-
-                if (destFile == null) throw IOException(getString(R.string.save_fail))
-
-                contentResolver.openOutputStream(destFile.uri)?.use { output ->
-                    FileInputStream(downloadedFile).use { input ->
-                        input.copyTo(output)
-                    }
+                val downloadedFiles = findCompletedDownloads(tempDir)
+                if (downloadedFiles.isEmpty()) {
+                    throw IOException(getString(R.string.file_creation_fail))
                 }
 
+                val targetDir = DocumentFile.fromTreeUri(applicationContext, saveUri)
+                    ?: throw IOException(getString(R.string.save_fail))
+                val savedFileNames = downloadedFiles.mapIndexed { index, downloadedFile ->
+                    val savingText = getString(R.string.download_saving_file, index + 1, downloadedFiles.size)
+                    updateNotification(notificationId, savingText, 100, true)
+                    sendDownloadProgress(100, savingText)
+                    copyToTargetDirectory(downloadedFile, targetDir, videoId == "none")
+                }
+                val completionContent = buildCompletionContent(savedFileNames)
                 withContext(Dispatchers.Main) {
-                    showCompletionNotification(notificationId, getString(R.string.download_complete_title), getString(R.string.download_complete_content, fileName))
+                    showCompletionNotification(
+                        notificationId,
+                        getString(R.string.download_complete_title),
+                        completionContent
+                    )
                 }
-                completionStatusMessage = getString(R.string.download_success, fileName)
+                completionStatusMessage = if (savedFileNames.size == 1) {
+                    getString(R.string.download_success, savedFileNames.first())
+                } else {
+                    getString(R.string.download_success_multiple, savedFileNames.size)
+                }
 
             } catch (e: Exception) {
                 Log.e("DownloadService", "Error", e)
@@ -162,6 +158,68 @@ class DownloadService : Service() {
                     stopSelf()
                 }
             }
+        }
+    }
+
+    private fun sendDownloadProgress(progress: Int, message: String) {
+        val intent = Intent(ACTION_DOWNLOAD_PROGRESS).apply {
+            putExtra(EXTRA_PROGRESS, progress)
+            putExtra(EXTRA_STATUS_MESSAGE, message)
+            putExtra(EXTRA_IS_DOWNLOADING, true)
+            setPackage(packageName)
+        }
+        sendBroadcast(intent)
+    }
+
+    private fun findCompletedDownloads(tempDir: File): List<File> {
+        return tempDir.walkTopDown()
+            .filter { it.isFile && !it.name.endsWith(".part", ignoreCase = true) }
+            .sortedBy { it.relativeTo(tempDir).invariantSeparatorsPath }
+            .toList()
+    }
+
+    private fun copyToTargetDirectory(sourceFile: File, targetDir: DocumentFile, audioOnly: Boolean): String {
+        val fileName = sourceFile.name
+        val mimeType = resolveMimeType(fileName, audioOnly)
+
+        targetDir.findFile(fileName)?.let { existingFile ->
+            if (!existingFile.isFile || !existingFile.delete()) {
+                throw IOException(getString(R.string.save_fail))
+            }
+        }
+
+        val destFile = targetDir.createFile(mimeType, fileName)
+            ?: throw IOException(getString(R.string.save_fail))
+
+        contentResolver.openOutputStream(destFile.uri)?.use { output ->
+            FileInputStream(sourceFile).use { input ->
+                input.copyTo(output)
+            }
+        } ?: throw IOException(getString(R.string.save_fail))
+
+        return fileName
+    }
+
+    private fun resolveMimeType(fileName: String, audioOnly: Boolean): String {
+        return when (fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+            "m4a" -> "audio/mp4"
+            "mp3" -> "audio/mpeg"
+            "opus" -> "audio/opus"
+            "aac" -> "audio/aac"
+            "wav" -> "audio/wav"
+            "flac" -> "audio/flac"
+            "webm" -> if (audioOnly) "audio/webm" else "video/webm"
+            "mkv" -> "video/x-matroska"
+            "mp4" -> "video/mp4"
+            else -> if (audioOnly) "audio/*" else "video/*"
+        }
+    }
+
+    private fun buildCompletionContent(fileNames: List<String>): String {
+        return if (fileNames.size == 1) {
+            getString(R.string.download_complete_content, fileNames.first())
+        } else {
+            getString(R.string.download_complete_content_multiple, fileNames.size)
         }
     }
 
